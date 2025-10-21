@@ -1,700 +1,573 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, collection, onSnapshot, query, orderBy, where, addDoc, deleteDoc, getDocs, Timestamp } from 'firebase/firestore';
 
-// --- Global Variable Handling (Mandatory for Canvas Environment) ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// Utility Components and Functions
-
-// Icon Components using Lucide
-const Calendar = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>;
-const Plus = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>;
-const Settings = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"/><path d="M12 14V6"/><path d="M12 18V14"/></svg>;
-const Trash = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>;
-const ChevronRight = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>;
-
-// Date utilities
-const formatDate = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-};
-
-const getTodayDateString = () => {
-    return new Date().toISOString().split('T')[0];
-};
-
-const getStartOfWeek = (date) => {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust to Monday
-    return new Date(d.setDate(diff));
-};
-
-const getStartOfMonth = (date) => {
-    const d = new Date(date);
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-};
-
-// --- Firebase Initialization and Auth ---
-
-const FirebaseProvider = ({ children }) => {
-    const [db, setDb] = useState(null);
-    const [auth, setAuth] = useState(null);
-    const [userId, setUserId] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
-
-    useEffect(() => {
-        if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-            console.error("Firebase config is missing or empty.");
-            setIsAuthReady(true);
-            return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Bodyweight Tracker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for clean, smooth UI */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
         }
-
-        try {
-            const app = initializeApp(firebaseConfig);
-            const firestore = getFirestore(app);
-            const authInstance = getAuth(app);
-
-            setDb(firestore);
-            setAuth(authInstance);
-
-            // Set up authentication listener
-            const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
-                if (user) {
-                    setUserId(user.uid);
-                    setIsAuthReady(true);
-                } else {
-                    // Try signing in with custom token or anonymously
-                    try {
-                        if (initialAuthToken) {
-                            const userCredential = await signInWithCustomToken(authInstance, initialAuthToken);
-                            setUserId(userCredential.user.uid);
-                        } else {
-                            const userCredential = await signInAnonymously(authInstance);
-                            setUserId(userCredential.user.uid);
-                        }
-                    } catch (error) {
-                        console.error("Firebase Auth Error:", error);
-                        setUserId(crypto.randomUUID()); // Fallback to anonymous ID
-                    } finally {
-                        setIsAuthReady(true);
-                    }
-                }
-            });
-
-            return () => unsubscribe();
-        } catch (e) {
-            console.error("Error initializing Firebase:", e);
-            setIsAuthReady(true);
+        .app-container {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 1rem 0;
         }
-    }, []);
-
-    const value = useMemo(() => ({ db, auth, userId, isAuthReady }), [db, auth, userId, isAuthReady]);
-
-    // Use a context-like pattern without creating an explicit context for simplicity in single file
-    if (!isAuthReady) {
-        return (
-            <div className="flex items-center justify-center h-screen bg-gray-50">
-                <div className="p-6 bg-white rounded-xl shadow-lg text-center">
-                    <div className="w-6 h-6 border-4 border-t-4 border-indigo-500 border-opacity-25 rounded-full animate-spin mx-auto mb-3"></div>
-                    <p className="text-gray-600">Loading workout data...</p>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <AppContext.Provider value={value}>
-            {children}
-        </AppContext.Provider>
-    );
-};
-
-// Mock Context for simplicity - functions as a wrapper in this single-file context
-const AppContext = React.createContext(null);
-const useAppContext = () => React.useContext(AppContext);
-
-
-// --- Firebase Data Hooks ---
-
-const useFirestoreData = (db, userId, collectionName) => {
-    const [data, setData] = useState([]);
-
-    useEffect(() => {
-        if (!db || !userId) return;
-
-        const collectionPath = `artifacts/${appId}/users/${userId}/${collectionName}`;
-        const q = query(collection(db, collectionPath));
-
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const items = [];
-            snapshot.forEach((doc) => {
-                items.push({ id: doc.id, ...doc.data() });
-            });
-            setData(items);
-        }, (error) => {
-            console.error(`Error fetching ${collectionName}:`, error);
-        });
-
-        return () => unsubscribe();
-    }, [db, userId, collectionName]);
-
-    return data;
-};
-
-// --- CRUD Operations ---
-
-const useCrudActions = (db, userId, collectionName) => {
-    const getCollectionRef = useCallback(() => {
-        if (!db || !userId) return null;
-        const collectionPath = `artifacts/${appId}/users/${userId}/${collectionName}`;
-        return collection(db, collectionPath);
-    }, [db, userId, collectionName]);
-
-    const add = useCallback(async (data) => {
-        const ref = getCollectionRef();
-        if (!ref) return false;
-        try {
-            await addDoc(ref, data);
-            return true;
-        } catch (e) {
-            console.error(`Error adding ${collectionName}:`, e);
-            return false;
+        .card {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
-    }, [getCollectionRef, collectionName]);
-
-    const update = useCallback(async (id, data) => {
-        const ref = getCollectionRef();
-        if (!ref) return false;
-        try {
-            await setDoc(doc(ref, id), data, { merge: true });
-            return true;
-        } catch (e) {
-            console.error(`Error updating ${collectionName}:`, e);
-            return false;
+        /* Custom modal backdrop for better visual hierarchy */
+        .modal-backdrop {
+            background-color: rgba(15, 23, 42, 0.8);
         }
-    }, [getCollectionRef, collectionName]);
+    </style>
+</head>
+<body>
 
-    const remove = useCallback(async (id) => {
-        const ref = getCollectionRef();
-        if (!ref) return false;
-        try {
-            await deleteDoc(doc(ref, id));
-            return true;
-        } catch (e) {
-            console.error(`Error deleting ${collectionName}:`, e);
-            return false;
-        }
-    }, [getCollectionRef, collectionName]);
-
-    return { add, update, remove };
-};
-
-// --- Main Views ---
-
-// 1. Manage Exercises View
-const ManageExercisesView = ({ exercises, onBack, updateExercise, addExercise, deleteExercise }) => {
-    const [editId, setEditId] = useState(null);
-    const [name, setName] = useState('');
-    const [type, setType] = useState('reps');
-
-    const isEditing = !!editId;
-
-    const handleEdit = (exercise) => {
-        setEditId(exercise.id);
-        setName(exercise.name);
-        setType(exercise.type);
-    };
-
-    const handleSave = (e) => {
-        e.preventDefault();
-        const data = { name, type };
-        if (isEditing) {
-            updateExercise(editId, data);
-        } else {
-            addExercise(data);
-        }
-        setEditId(null);
-        setName('');
-        setType('reps');
-    };
-
-    const handleDelete = (id) => {
-        if (window.confirm('Are you sure you want to delete this exercise and all its logs?')) {
-            deleteExercise(id);
-        }
-    };
-
-    return (
-        <div className="p-4 sm:p-6 max-w-lg mx-auto bg-white shadow-xl rounded-xl">
-            <h2 className="text-2xl font-bold mb-6 text-indigo-700">Manage Exercises</h2>
-
-            {/* Add/Edit Form */}
-            <form onSubmit={handleSave} className="mb-8 p-4 border border-gray-200 rounded-lg shadow-inner bg-gray-50">
-                <h3 className="text-xl font-semibold mb-4 text-gray-800">{isEditing ? 'Edit Exercise' : 'Add New Exercise'}</h3>
-                <div className="space-y-4">
-                    <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Exercise Name (e.g., Pushups, Plank, Squats)"
-                        required
-                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
-                    />
-                    <select
-                        value={type}
-                        onChange={(e) => setType(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
-                    >
-                        <option value="reps">Track by Reps</option>
-                        <option value="time">Track by Time (Seconds)</option>
-                    </select>
-                    <div className="flex space-x-2">
-                        <button
-                            type="submit"
-                            className="flex-1 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-200"
-                        >
-                            {isEditing ? 'Save Changes' : 'Add Exercise'}
-                        </button>
-                        {isEditing && (
-                            <button
-                                type="button"
-                                onClick={() => { setEditId(null); setName(''); setType('reps'); }}
-                                className="px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 transition duration-200"
-                            >
-                                Cancel
-                            </button>
-                        )}
-                    </div>
-                </div>
-            </form>
-
-            {/* Exercise List */}
-            <h3 className="text-xl font-semibold mb-4 text-gray-800">Current Exercises ({exercises.length})</h3>
-            <ul className="space-y-2">
-                {exercises.map((exercise) => (
-                    <li key={exercise.id} className="flex justify-between items-center p-3 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-indigo-50 transition duration-150">
-                        <div className="flex-grow">
-                            <span className="font-medium text-gray-900">{exercise.name}</span>
-                            <span className="text-sm text-indigo-500 ml-2">({exercise.type === 'reps' ? 'Reps' : 'Time'})</span>
-                        </div>
-                        <div className="space-x-2 flex">
-                            <button
-                                onClick={() => handleEdit(exercise)}
-                                className="p-1 text-indigo-600 hover:text-indigo-800 transition duration-150"
-                                aria-label={`Edit ${exercise.name}`}
-                            >
-                                <Settings className="w-5 h-5" />
-                            </button>
-                            <button
-                                onClick={() => handleDelete(exercise.id)}
-                                className="p-1 text-red-500 hover:text-red-700 transition duration-150"
-                                aria-label={`Delete ${exercise.name}`}
-                            >
-                                <Trash className="w-5 h-5" />
-                            </button>
-                        </div>
-                    </li>
-                ))}
-            </ul>
-
-            <button
-                onClick={onBack}
-                className="mt-6 w-full px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-200"
-            >
-                Back to Dashboard
-            </button>
+    <div id="app" class="app-container w-full">
+        <!-- Main Content Area -->
+        <div id="main-view" class="w-full max-w-2xl px-4 sm:px-6 py-8">
+            <!-- Content will be rendered here by JS -->
         </div>
-    );
-};
 
-// 2. Exercise Logging Modal
-const ExerciseLogModal = ({ exercise, onClose, addLog }) => {
-    const unit = exercise.type === 'reps' ? 'Reps' : 'Seconds';
-    const [setLogs, setSetLogs] = useState([{ value: 0 }]);
-
-    const handleAddSet = () => {
-        setSetLogs(prev => [...prev, { value: 0 }]);
-    };
-
-    const handleValueChange = (index, newValue) => {
-        setSetLogs(prev => prev.map((log, i) => (i === index ? { ...log, value: parseInt(newValue) || 0 } : log)));
-    };
-
-    const handleSave = (e) => {
-        e.preventDefault();
-        const validLogs = setLogs.filter(l => l.value > 0);
-        if (validLogs.length === 0) {
-            alert('Please log at least one set with a value greater than zero.');
-            return;
-        }
-
-        const totalValue = validLogs.reduce((sum, log) => sum + log.value, 0);
-        const newLog = {
-            exerciseId: exercise.id,
-            date: Timestamp.fromDate(new Date()),
-            value: totalValue,
-            unit: unit.toLowerCase(),
-            sets: validLogs.length,
-            dateString: getTodayDateString(),
-        };
-
-        addLog(newLog);
-        onClose();
-    };
-
-    return (
-        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-                <h3 className="text-2xl font-bold mb-4 text-indigo-700 border-b pb-2">{exercise.name} Log</h3>
-                <p className="text-gray-600 mb-4">Tracking by: <span className="font-semibold text-indigo-500">{unit}</span></p>
-
-                <form onSubmit={handleSave} className="space-y-4">
-                    {setLogs.map((log, index) => (
-                        <div key={index} className="flex items-center space-x-3">
-                            <label className="font-medium">Set {index + 1}:</label>
-                            <input
-                                type="number"
-                                min="0"
-                                value={log.value}
-                                onChange={(e) => handleValueChange(index, e.target.value)}
-                                required
-                                className="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                            />
-                            <span className="text-gray-500">{unit}</span>
-                        </div>
-                    ))}
-
-                    <button
-                        type="button"
-                        onClick={handleAddSet}
-                        className="w-full flex items-center justify-center px-4 py-2 border border-dashed border-indigo-300 text-indigo-600 rounded-lg hover:bg-indigo-50 transition duration-150"
-                    >
-                        <Plus className="w-5 h-5 mr-2" /> Add Set
-                    </button>
-
-                    <div className="pt-4 flex space-x-3">
-                        <button
-                            type="submit"
-                            className="flex-1 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-200"
-                        >
-                            Save Log
-                        </button>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="flex-1 px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 transition duration-200"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    );
-};
-
-// 3. Historical Stats Modal
-const HistoricalStatsModal = ({ exercise, logs, onClose }) => {
-    const [timeframe, setTimeframe] = useState('week'); // week, month, all
-
-    const filteredLogs = useMemo(() => {
-        const now = new Date();
-        const todayStr = getTodayDateString();
-
-        return logs
-            .filter(log => log.exerciseId === exercise.id)
-            .sort((a, b) => b.date.toDate().getTime() - a.date.toDate().getTime()) // Sort latest first
-            .filter(log => {
-                if (timeframe === 'all') return true;
-
-                const logDate = log.date.toDate();
-                if (timeframe === 'week') {
-                    const startOfWeek = getStartOfWeek(now);
-                    return logDate >= startOfWeek;
-                }
-                if (timeframe === 'month') {
-                    const startOfMonth = getStartOfMonth(now);
-                    return logDate >= startOfMonth;
-                }
-                return true;
-            });
-    }, [logs, exercise.id, timeframe]);
-
-    const statsSummary = useMemo(() => {
-        const totalValue = filteredLogs.reduce((sum, log) => sum + log.value, 0);
-        const totalSets = filteredLogs.reduce((sum, log) => sum + log.sets, 0);
-        const uniqueDays = new Set(filteredLogs.map(log => log.dateString)).size;
-        const averagePerSession = uniqueDays > 0 ? (totalValue / uniqueDays).toFixed(1) : 0;
-
-        // Find the record with the highest value to show as "Personal Best"
-        const personalBest = filteredLogs.reduce((best, current) => {
-            return current.value > best.value ? current : best;
-        }, { value: 0, date: null, sets: 0 });
-
-        return { totalValue, totalSets, uniqueDays, averagePerSession, personalBest };
-    }, [filteredLogs]);
-
-    const unit = exercise.type === 'reps' ? 'Reps' : 'Seconds';
-
-    return (
-        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
-                <h3 className="text-3xl font-extrabold mb-4 text-indigo-700">{exercise.name} History</h3>
-
-                {/* Timeframe Selector */}
-                <div className="flex justify-around mb-6 p-1 bg-gray-100 rounded-lg">
-                    {['week', 'month', 'all'].map((t) => (
-                        <button
-                            key={t}
-                            onClick={() => setTimeframe(t)}
-                            className={`flex-1 py-2 text-center text-sm font-semibold rounded-lg capitalize transition duration-200 ${
-                                timeframe === t
-                                    ? 'bg-indigo-600 text-white shadow-md'
-                                    : 'text-gray-600 hover:bg-gray-200'
-                            }`}
-                        >
-                            {t}
-                        </button>
-                    ))}
-                </div>
-
-                {/* Summary Stats */}
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                    <StatCard title={`Total ${unit}`} value={statsSummary.totalValue} />
-                    <StatCard title="Total Sets" value={statsSummary.totalSets} />
-                    <StatCard title="Workout Days" value={statsSummary.uniqueDays} />
-                    <StatCard title={`PB (${unit}/day)`} value={statsSummary.personalBest.value} unitInfo={statsSummary.personalBest.date ? `on ${formatDate(statsSummary.personalBest.date)}` : ''} />
-                </div>
-
-                {/* Log List */}
-                <h4 className="text-xl font-semibold mb-3 text-gray-800 border-t pt-4">Log Details ({filteredLogs.length})</h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {filteredLogs.length > 0 ? (
-                        filteredLogs.map((log) => (
-                            <div key={log.id} className="flex justify-between items-center p-3 bg-indigo-50 rounded-lg shadow-sm">
-                                <span className="font-semibold text-gray-800">{formatDate(log.date)}</span>
-                                <div className="text-right">
-                                    <p className="text-lg font-bold text-indigo-600">{log.value} {unit}</p>
-                                    <p className="text-sm text-gray-500">{log.sets} Sets</p>
-                                </div>
-                            </div>
-                        ))
-                    ) : (
-                        <p className="text-center text-gray-500 p-4 bg-white rounded-lg border">No logs recorded for this period.</p>
-                    )}
-                </div>
-
-                <button
-                    onClick={onClose}
-                    className="mt-6 w-full px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-200"
-                >
-                    Close History
-                </button>
-            </div>
-        </div>
-    );
-};
-
-// Simple Stat Card for the modal
-const StatCard = ({ title, value, unitInfo = '' }) => (
-    <div className="bg-indigo-100 p-4 rounded-xl text-center shadow-md">
-        <p className="text-sm font-medium text-indigo-700">{title}</p>
-        <p className="text-2xl font-extrabold text-indigo-900 mt-1">{value}</p>
-        {unitInfo && <p className="text-xs text-indigo-600 mt-1">{unitInfo}</p>}
+        <!-- Modals -->
+        <div id="log-modal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-4"></div>
+        <div id="stats-modal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-4"></div>
+        <div id="management-view" class="hidden w-full max-w-2xl px-4 sm:px-6 py-8"></div>
     </div>
-);
 
+    <script>
+        // --- DATA MANAGEMENT (LOCAL STORAGE) ---
+        const STORAGE_KEY = 'bodyweightTrackerData';
 
-// 4. Main Dashboard View
-const DashboardView = ({ exercises, logs, onManage, onLog, onShowHistory }) => {
-    const todayStr = getTodayDateString();
+        function generateUUID() {
+            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+            );
+        }
 
-    const todayLogs = useMemo(() => {
-        const dailyLogs = logs.filter(log => log.dateString === todayStr);
-
-        return exercises.map(exercise => {
-            const exerciseLogs = dailyLogs.filter(log => log.exerciseId === exercise.id);
-            const totalValue = exerciseLogs.reduce((sum, log) => sum + log.value, 0);
-            const totalSets = exerciseLogs.reduce((sum, log) => sum + log.sets, 0);
-            return {
-                ...exercise,
-                totalValue,
-                totalSets,
-                unit: exercise.type === 'reps' ? 'Reps' : 'Sec',
-            };
-        });
-    }, [exercises, logs, todayStr]);
-
-    return (
-        <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-            <div className="flex justify-between items-center mb-6">
-                <h1 className="text-3xl font-extrabold text-indigo-800">Progressive Overload Tracker</h1>
-                <div className="flex space-x-2">
-                    <button
-                        onClick={onManage}
-                        className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition duration-150 shadow-md"
-                        aria-label="Manage Exercises"
-                        title="Manage Exercises"
-                    >
-                        <Settings className="w-6 h-6 text-gray-700" />
-                    </button>
-                </div>
-            </div>
-
-            {todayLogs.length === 0 ? (
-                <div className="p-8 bg-white rounded-xl shadow-lg text-center border-4 border-dashed border-indigo-200">
-                    <p className="text-xl text-gray-700 font-semibold mb-4">No exercises tracked yet!</p>
-                    <p className="text-gray-500 mb-6">Go to the settings menu to add your first bodyweight exercise (Pushups, Squats, Planks, etc.).</p>
-                    <button
-                        onClick={onManage}
-                        className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-700 transition duration-200"
-                    >
-                        Add Exercises Now
-                    </button>
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">Today's Progress: {formatDate(new Date())}</h2>
-                    {todayLogs.map((exercise) => (
-                        <div key={exercise.id} className="bg-white rounded-xl shadow-lg p-5 border-t-4 border-indigo-500">
-                            <div className="flex justify-between items-start mb-3">
-                                <h3 className="text-xl font-bold text-gray-900">{exercise.name}</h3>
-                                <button
-                                    onClick={() => onLog(exercise)}
-                                    className="flex items-center px-3 py-1 text-sm bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition duration-150 shadow-md"
-                                >
-                                    <Plus className="w-4 h-4 mr-1" /> Log
-                                </button>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-4 border-t pt-3">
-                                <div>
-                                    <p className="text-sm text-gray-500">Total {exercise.unit}</p>
-                                    <p className="text-2xl font-extrabold text-indigo-600">{exercise.totalValue}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm text-gray-500">Sets Done</p>
-                                    <p className="text-2xl font-extrabold text-indigo-600">{exercise.totalSets}</p>
-                                </div>
-                                <div className="flex items-center justify-end">
-                                    <button
-                                        onClick={() => onShowHistory(exercise)}
-                                        className="flex items-center text-indigo-500 hover:text-indigo-700 font-medium transition duration-150"
-                                    >
-                                        View Stats <ChevronRight className="w-5 h-5 ml-1" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-            <p className="mt-8 text-center text-xs text-gray-400">User ID: {todayLogs.length > 0 && todayLogs[0].userId}</p>
-        </div>
-    );
-};
-
-
-// --- The Main App Component ---
-const App = () => {
-    const { db, userId, isAuthReady } = useAppContext();
-    const [view, setView] = useState('dashboard'); // 'dashboard', 'manage_exercises'
-    const [selectedExercise, setSelectedExercise] = useState(null); // for logging or history
-
-    // Fetch data using the custom hook
-    const exercises = useFirestoreData(db, userId, 'exercises');
-    const logs = useFirestoreData(db, userId, 'logs');
-
-    // CRUD actions for Exercises
-    const { add: addExercise, update: updateExercise, remove: removeExercise } = useCrudActions(db, userId, 'exercises');
-    // CRUD actions for Logs
-    const { add: addLog, remove: removeLog } = useCrudActions(db, userId, 'logs');
-
-    // Extended delete for exercise: also delete all associated logs
-    const handleDeleteExercise = useCallback(async (exerciseId) => {
-        await removeExercise(exerciseId);
-
-        // Delete associated logs (need to fetch logs first, onSnapshot won't work for mass delete)
-        if (db && userId) {
-            const logsRef = collection(db, `artifacts/${appId}/users/${userId}/logs`);
-            const q = query(logsRef, where('exerciseId', '==', exerciseId));
-            
+        function loadData() {
             try {
-                const snapshot = await getDocs(q);
-                const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
-                await Promise.all(deletePromises);
-                console.log(`Deleted ${deletePromises.length} logs for exercise ${exerciseId}.`);
+                const storedData = localStorage.getItem(STORAGE_KEY);
+                return storedData ? JSON.parse(storedData) : { exercises: [], logs: [] };
             } catch (e) {
-                console.error("Failed to delete associated logs:", e);
+                console.error("Error loading data from localStorage:", e);
+                return { exercises: [], logs: [] };
             }
         }
-    }, [db, userId, removeExercise]);
+
+        function saveData(data) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) {
+                console.error("Error saving data to localStorage:", e);
+            }
+        }
+
+        let appData = loadData();
+
+        // --- DATE UTILITIES ---
+
+        function getTodayDateString() {
+            return new Date().toISOString().split('T')[0];
+        }
+
+        function formatDate(dateStr) {
+            const date = new Date(dateStr + 'T00:00:00'); // Ensure UTC neutrality for date string
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function getStartOfWeek(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust to Monday
+            const start = new Date(d.setDate(diff));
+            return start.toISOString().split('T')[0];
+        }
+
+        function getStartOfMonth(date) {
+            const d = new Date(date);
+            const start = new Date(d.getFullYear(), d.getMonth(), 1);
+            return start.toISOString().split('T')[0];
+        }
+
+        // --- MAIN RENDER LOOP ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            renderDashboard();
+        });
+
+        function switchView(viewName) {
+            document.getElementById('main-view').classList.add('hidden');
+            document.getElementById('management-view').classList.add('hidden');
+
+            if (viewName === 'manage') {
+                document.getElementById('management-view').classList.remove('hidden');
+                renderManageExercises();
+            } else {
+                document.getElementById('main-view').classList.remove('hidden');
+                renderDashboard();
+            }
+        }
+
+        // --- DASHBOARD RENDERING ---
+
+        function renderDashboard() {
+            const mainView = document.getElementById('main-view');
+            const todayStr = getTodayDateString();
+
+            const todayLogs = appData.exercises.map(exercise => {
+                const exerciseLogs = appData.logs.filter(log => log.exerciseId === exercise.id && log.dateString === todayStr);
+                const totalValue = exerciseLogs.reduce((sum, log) => sum + log.value, 0);
+                const totalSets = exerciseLogs.reduce((sum, log) => sum + log.sets, 0);
+                return {
+                    ...exercise,
+                    totalValue,
+                    totalSets,
+                    unit: exercise.type === 'reps' ? 'Reps' : 'Sec',
+                };
+            });
+
+            if (todayLogs.length === 0) {
+                 mainView.innerHTML = `
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-extrabold text-indigo-800">Progressive Overload Tracker</h1>
+                        <button onclick="switchView('manage')" class="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition duration-150 shadow-md" aria-label="Manage Exercises" title="Manage Exercises">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"/><path d="M12 14V6"/><path d="M12 18V14"/></svg>
+                        </button>
+                    </div>
+                    <div class="p-8 bg-white rounded-xl card text-center border-4 border-dashed border-indigo-200">
+                        <p class="text-xl text-gray-700 font-semibold mb-4">No exercises tracked yet!</p>
+                        <p class="text-gray-500 mb-6">Go to the settings menu to add your first bodyweight exercise (Pushups, Squats, Planks, etc.).</p>
+                        <button onclick="switchView('manage')" class="px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-700 transition duration-200">
+                            Add Exercises Now
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            mainView.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h1 class="text-3xl font-extrabold text-indigo-800">Progressive Overload Tracker</h1>
+                    <button onclick="switchView('manage')" class="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition duration-150 shadow-md" aria-label="Manage Exercises" title="Manage Exercises">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"/><path d="M12 14V6"/><path d="M12 18V14"/></svg>
+                    </button>
+                </div>
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Today's Progress: ${formatDate(todayStr)}</h2>
+                <div id="exercise-list" class="space-y-4">
+                    <!-- Exercise cards will be injected here -->
+                </div>
+            `;
+
+            const listContainer = document.getElementById('exercise-list');
+            todayLogs.forEach(exercise => {
+                const card = document.createElement('div');
+                card.className = "bg-white rounded-xl card p-5 border-t-4 border-indigo-500";
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="text-xl font-bold text-gray-900">${exercise.name}</h3>
+                        <button data-id="${exercise.id}" class="log-btn flex items-center px-3 py-1 text-sm bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition duration-150 shadow-md">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-1"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Log
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-4 border-t pt-3">
+                        <div>
+                            <p class="text-sm text-gray-500">Total ${exercise.unit}</p>
+                            <p class="text-2xl font-extrabold text-indigo-600">${exercise.totalValue}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-gray-500">Sets Done</p>
+                            <p class="text-2xl font-extrabold text-indigo-600">${exercise.totalSets}</p>
+                        </div>
+                        <div class="flex items-center justify-end">
+                            <button data-id="${exercise.id}" class="history-btn flex items-center text-indigo-500 hover:text-indigo-700 font-medium transition duration-150">
+                                View Stats <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ml-1"><path d="m9 18 6-6-6-6"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                listContainer.appendChild(card);
+            });
+
+            // Attach event listeners after rendering
+            document.querySelectorAll('.log-btn').forEach(button => {
+                button.addEventListener('click', (e) => showLogModal(e.target.closest('button').dataset.id));
+            });
+            document.querySelectorAll('.history-btn').forEach(button => {
+                button.addEventListener('click', (e) => showStatsModal(e.target.closest('button').dataset.id));
+            });
+        }
+
+        // --- EXERCISE LOGGING MODAL ---
+
+        function showLogModal(exerciseId) {
+            const exercise = appData.exercises.find(e => e.id === exerciseId);
+            if (!exercise) return;
+
+            const unit = exercise.type === 'reps' ? 'Reps' : 'Seconds';
+            const logModal = document.getElementById('log-modal');
+
+            logModal.innerHTML = `
+                <div class="bg-white rounded-xl card w-full max-w-md p-6">
+                    <h3 class="text-2xl font-bold mb-4 text-indigo-700 border-b pb-2">${exercise.name} Log</h3>
+                    <p class="text-gray-600 mb-4">Tracking by: <span class="font-semibold text-indigo-500">${unit}</span></p>
+
+                    <form id="log-form" class="space-y-4">
+                        <div id="set-logs" class="space-y-3">
+                            <!-- Sets will be added here -->
+                        </div>
+
+                        <button type="button" id="add-set-btn" class="w-full flex items-center justify-center px-4 py-2 border border-dashed border-indigo-300 text-indigo-600 rounded-lg hover:bg-indigo-50 transition duration-150">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add Set
+                        </button>
+
+                        <div class="pt-4 flex space-x-3">
+                            <button type="submit" class="flex-1 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-200">
+                                Save Log
+                            </button>
+                            <button type="button" id="close-log-modal" class="flex-1 px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 transition duration-200">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            logModal.classList.remove('hidden');
+
+            const setLogsContainer = document.getElementById('set-logs');
+            const addSetBtn = document.getElementById('add-set-btn');
+            const logForm = document.getElementById('log-form');
+
+            let setCounter = 0;
+
+            const addSetInput = (initialValue = 0) => {
+                setCounter++;
+                const div = document.createElement('div');
+                div.className = 'flex items-center space-x-3';
+                div.innerHTML = `
+                    <label class="font-medium">Set ${setCounter}:</label>
+                    <input type="number" min="0" value="${initialValue}" required class="set-value flex-grow p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" />
+                    <span class="text-gray-500">${unit}</span>
+                `;
+                setLogsContainer.appendChild(div);
+            };
+
+            addSetInput(); // Add initial set
+
+            addSetBtn.addEventListener('click', () => addSetInput(0));
+            document.getElementById('close-log-modal').addEventListener('click', () => logModal.classList.add('hidden'));
+
+            logForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const inputs = Array.from(document.querySelectorAll('.set-value'));
+                const values = inputs.map(input => parseInt(input.value) || 0).filter(v => v > 0);
+
+                if (values.length === 0) {
+                    // Custom non-alert message for user feedback
+                    const feedback = document.createElement('p');
+                    feedback.className = 'text-red-500 text-sm text-center mt-2';
+                    feedback.textContent = 'Please log at least one set with a value greater than zero.';
+                    logForm.appendChild(feedback);
+                    return;
+                }
+
+                const totalValue = values.reduce((sum, v) => sum + v, 0);
+                const newLog = {
+                    id: generateUUID(),
+                    exerciseId: exerciseId,
+                    dateString: getTodayDateString(),
+                    value: totalValue,
+                    unit: unit.toLowerCase(),
+                    sets: values.length,
+                };
+
+                appData.logs.push(newLog);
+                saveData(appData);
+                logModal.classList.add('hidden');
+                renderDashboard();
+            });
+        }
 
 
-    if (!isAuthReady) {
-        return null; // Handled by FirebaseProvider wrapper
-    }
+        // --- HISTORICAL STATS MODAL ---
 
-    // Dynamic View Rendering
-    let content;
+        function showStatsModal(exerciseId) {
+            const exercise = appData.exercises.find(e => e.id === exerciseId);
+            if (!exercise) return;
 
-    if (view === 'manage_exercises') {
-        content = (
-            <ManageExercisesView
-                exercises={exercises}
-                onBack={() => setView('dashboard')}
-                updateExercise={updateExercise}
-                addExercise={addExercise}
-                deleteExercise={handleDeleteExercise}
-            />
-        );
-    } else {
-        // Default: Dashboard View
-        content = (
-            <DashboardView
-                exercises={exercises}
-                logs={logs}
-                onManage={() => setView('manage_exercises')}
-                onLog={(exercise) => setSelectedExercise({ type: 'log', data: exercise })}
-                onShowHistory={(exercise) => setSelectedExercise({ type: 'history', data: exercise })}
-            />
-        );
-    }
+            const statsModal = document.getElementById('stats-modal');
+            statsModal.classList.remove('hidden');
 
-    return (
-        <div className="min-h-screen bg-gray-50 font-sans">
-            {content}
+            const unit = exercise.type === 'reps' ? 'Reps' : 'Seconds';
+            
+            const renderStatsContent = (timeframe) => {
+                const nowStr = getTodayDateString();
+                let filteredLogs = appData.logs.filter(log => log.exerciseId === exercise.id);
 
-            {/* Modals */}
-            {selectedExercise && selectedExercise.type === 'log' && (
-                <ExerciseLogModal
-                    exercise={selectedExercise.data}
-                    onClose={() => setSelectedExercise(null)}
-                    addLog={addLog}
-                />
-            )}
-            {selectedExercise && selectedExercise.type === 'history' && (
-                <HistoricalStatsModal
-                    exercise={selectedExercise.data}
-                    logs={logs}
-                    onClose={() => setSelectedExercise(null)}
-                />
-            )}
-        </div>
-    );
-};
+                if (timeframe === 'week') {
+                    const startOfWeekStr = getStartOfWeek(nowStr);
+                    filteredLogs = filteredLogs.filter(log => log.dateString >= startOfWeekStr);
+                } else if (timeframe === 'month') {
+                    const startOfMonthStr = getStartOfMonth(nowStr);
+                    filteredLogs = filteredLogs.filter(log => log.dateString >= startOfMonthStr);
+                }
+                
+                // Sort by date (newest first)
+                filteredLogs.sort((a, b) => new Date(b.dateString) - new Date(a.dateString));
 
-// Wrap App in Firebase Provider to ensure auth and DB are ready
-const WrappedApp = () => (
-    <FirebaseProvider>
-        <App />
-    </FirebaseProvider>
-);
+                const totalValue = filteredLogs.reduce((sum, log) => sum + log.value, 0);
+                const totalSets = filteredLogs.reduce((sum, log) => sum + log.sets, 0);
+                const uniqueDays = new Set(filteredLogs.map(log => log.dateString)).size;
 
-export default WrappedApp;
+                const personalBest = filteredLogs.reduce((best, current) => {
+                    return current.value > best.value ? current : (best.value > 0 ? best : { value: 0, dateString: 'N/A' });
+                }, { value: 0, dateString: 'N/A', sets: 0 });
+
+                const statsSummaryHtml = `
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <div class="bg-indigo-100 p-4 rounded-xl text-center shadow-md">
+                            <p class="text-sm font-medium text-indigo-700">Total ${unit}</p>
+                            <p class="text-2xl font-extrabold text-indigo-900 mt-1">${totalValue}</p>
+                        </div>
+                        <div class="bg-indigo-100 p-4 rounded-xl text-center shadow-md">
+                            <p class="text-sm font-medium text-indigo-700">Total Sets</p>
+                            <p class="text-2xl font-extrabold text-indigo-900 mt-1">${totalSets}</p>
+                        </div>
+                        <div class="bg-indigo-100 p-4 rounded-xl text-center shadow-md">
+                            <p class="text-sm font-medium text-indigo-700">Workout Days</p>
+                            <p class="text-2xl font-extrabold text-indigo-900 mt-1">${uniqueDays}</p>
+                        </div>
+                        <div class="bg-indigo-100 p-4 rounded-xl text-center shadow-md">
+                            <p class="text-sm font-medium text-indigo-700">Personal Best (${unit})</p>
+                            <p class="text-2xl font-extrabold text-indigo-900 mt-1">${personalBest.value}</p>
+                            <p class="text-xs text-indigo-600 mt-1">${personalBest.dateString !== 'N/A' ? 'on ' + formatDate(personalBest.dateString) : ''}</p>
+                        </div>
+                    </div>
+                `;
+
+                const logListHtml = filteredLogs.length > 0 ?
+                    filteredLogs.map(log => `
+                        <div class="flex justify-between items-center p-3 bg-indigo-50 rounded-lg shadow-sm">
+                            <span class="font-semibold text-gray-800">${formatDate(log.dateString)}</span>
+                            <div class="text-right">
+                                <p class="text-lg font-bold text-indigo-600">${log.value} ${unit}</p>
+                                <p class="text-sm text-gray-500">${log.sets} Sets</p>
+                            </div>
+                        </div>
+                    `).join('')
+                    : '<p class="text-center text-gray-500 p-4 bg-white rounded-lg border">No logs recorded for this period.</p>';
+
+                return { statsSummaryHtml, logListHtml, filteredLogsCount: filteredLogs.length };
+            };
+            
+            let currentFrame = 'week';
+            const initialRender = renderStatsContent(currentFrame);
+
+            statsModal.innerHTML = `
+                <div class="bg-white rounded-xl card w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+                    <h3 class="text-3xl font-extrabold mb-4 text-indigo-700">${exercise.name} History</h3>
+
+                    <!-- Timeframe Selector -->
+                    <div class="flex justify-around mb-6 p-1 bg-gray-100 rounded-lg" id="timeframe-selector">
+                        <button data-frame="week" class="frame-btn flex-1 py-2 text-center text-sm font-semibold rounded-lg capitalize transition duration-200 bg-indigo-600 text-white shadow-md">Week</button>
+                        <button data-frame="month" class="frame-btn flex-1 py-2 text-center text-sm font-semibold rounded-lg capitalize transition duration-200 text-gray-600 hover:bg-gray-200">Month</button>
+                        <button data-frame="all" class="frame-btn flex-1 py-2 text-center text-sm font-semibold rounded-lg capitalize transition duration-200 text-gray-600 hover:bg-gray-200">All Time</button>
+                    </div>
+
+                    <!-- Summary Stats -->
+                    <div id="stats-summary">
+                        ${initialRender.statsSummaryHtml}
+                    </div>
+
+                    <!-- Log List -->
+                    <h4 class="text-xl font-semibold mb-3 text-gray-800 border-t pt-4">Log Details (<span id="log-count">${initialRender.filteredLogsCount}</span>)</h4>
+                    <div id="log-list" class="space-y-2 max-h-60 overflow-y-auto">
+                        ${initialRender.logListHtml}
+                    </div>
+
+                    <button id="close-stats-modal" class="mt-6 w-full px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-200">
+                        Close History
+                    </button>
+                </div>
+            `;
+            
+            // Event listeners for stats modal
+            document.getElementById('close-stats-modal').addEventListener('click', () => statsModal.classList.add('hidden'));
+
+            document.querySelectorAll('.frame-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const newFrame = e.target.dataset.frame;
+                    if (currentFrame === newFrame) return;
+
+                    // Update button styling
+                    document.querySelectorAll('.frame-btn').forEach(btn => {
+                        btn.classList.remove('bg-indigo-600', 'text-white', 'shadow-md');
+                        btn.classList.add('text-gray-600', 'hover:bg-gray-200');
+                    });
+                    e.target.classList.add('bg-indigo-600', 'text-white', 'shadow-md');
+                    e.target.classList.remove('text-gray-600', 'hover:bg-gray-200');
+                    
+                    currentFrame = newFrame;
+                    const content = renderStatsContent(newFrame);
+                    document.getElementById('stats-summary').innerHTML = content.statsSummaryHtml;
+                    document.getElementById('log-list').innerHTML = content.logListHtml;
+                    document.getElementById('log-count').textContent = content.filteredLogsCount;
+                });
+            });
+        }
+
+        // --- MANAGE EXERCISES VIEW ---
+
+        function renderManageExercises() {
+            const managementView = document.getElementById('management-view');
+            managementView.innerHTML = `
+                <div class="p-4 sm:p-6 max-w-lg mx-auto bg-white card rounded-xl">
+                    <h2 class="text-2xl font-bold mb-6 text-indigo-700">Manage Exercises</h2>
+
+                    <!-- Add/Edit Form -->
+                    <form id="manage-form" class="mb-8 p-4 border border-gray-200 rounded-lg shadow-inner bg-gray-50">
+                        <h3 id="form-title" class="text-xl font-semibold mb-4 text-gray-800">Add New Exercise</h3>
+                        <input type="hidden" id="edit-id" value="">
+                        <div class="space-y-4">
+                            <input type="text" id="exercise-name" placeholder="Exercise Name (e.g., Pushups, Plank, Squats)" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150" />
+                            <select id="exercise-type" class="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+                                <option value="reps">Track by Reps</option>
+                                <option value="time">Track by Time (Seconds)</option>
+                            </select>
+                            <div class="flex space-x-2">
+                                <button type="submit" id="save-btn" class="flex-1 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-200">
+                                    Add Exercise
+                                </button>
+                                <button type="button" id="cancel-btn" class="hidden px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 transition duration-200">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <!-- Exercise List -->
+                    <h3 class="text-xl font-semibold mb-4 text-gray-800">Current Exercises (${appData.exercises.length})</h3>
+                    <ul id="exercise-list-manage" class="space-y-2">
+                        <!-- List items injected here -->
+                    </ul>
+
+                    <button onclick="switchView('dashboard')" class="mt-6 w-full px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-200">
+                        Back to Dashboard
+                    </button>
+                </div>
+            `;
+
+            const listContainer = document.getElementById('exercise-list-manage');
+            appData.exercises.forEach(exercise => {
+                const li = document.createElement('li');
+                li.className = "flex justify-between items-center p-3 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-indigo-50 transition duration-150";
+                li.innerHTML = `
+                    <div class="flex-grow">
+                        <span class="font-medium text-gray-900">${exercise.name}</span>
+                        <span class="text-sm text-indigo-500 ml-2">(${exercise.type === 'reps' ? 'Reps' : 'Time'})</span>
+                    </div>
+                    <div class="space-x-2 flex">
+                        <button data-id="${exercise.id}" class="edit-btn p-1 text-indigo-600 hover:text-indigo-800 transition duration-150" aria-label="Edit ${exercise.name}">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"/><path d="M12 14V6"/><path d="M12 18V14"/></svg>
+                        </button>
+                        <button data-id="${exercise.id}" class="delete-btn p-1 text-red-500 hover:text-red-700 transition duration-150" aria-label="Delete ${exercise.name}">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(li);
+            });
+
+            // Form Logic
+            const form = document.getElementById('manage-form');
+            const nameInput = document.getElementById('exercise-name');
+            const typeSelect = document.getElementById('exercise-type');
+            const editIdInput = document.getElementById('edit-id');
+            const formTitle = document.getElementById('form-title');
+            const saveBtn = document.getElementById('save-btn');
+            const cancelBtn = document.getElementById('cancel-btn');
+
+            const resetForm = () => {
+                nameInput.value = '';
+                typeSelect.value = 'reps';
+                editIdInput.value = '';
+                formTitle.textContent = 'Add New Exercise';
+                saveBtn.textContent = 'Add Exercise';
+                cancelBtn.classList.add('hidden');
+            };
+
+            cancelBtn.addEventListener('click', resetForm);
+
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const id = editIdInput.value;
+                const newName = nameInput.value.trim();
+                const newType = typeSelect.value;
+
+                if (id) {
+                    // Edit existing
+                    const index = appData.exercises.findIndex(e => e.id === id);
+                    if (index > -1) {
+                        appData.exercises[index].name = newName;
+                        appData.exercises[index].type = newType;
+                    }
+                } else {
+                    // Add new
+                    appData.exercises.push({
+                        id: generateUUID(),
+                        name: newName,
+                        type: newType
+                    });
+                }
+                saveData(appData);
+                resetForm();
+                renderManageExercises(); // Re-render the list
+            });
+
+            // Edit Button Handler
+            document.querySelectorAll('.edit-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const id = e.target.closest('button').dataset.id;
+                    const exercise = appData.exercises.find(e => e.id === id);
+                    if (exercise) {
+                        nameInput.value = exercise.name;
+                        typeSelect.value = exercise.type;
+                        editIdInput.value = exercise.id;
+                        formTitle.textContent = 'Edit Exercise';
+                        saveBtn.textContent = 'Save Changes';
+                        cancelBtn.classList.remove('hidden');
+                    }
+                });
+            });
+
+            // Delete Button Handler
+            document.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    // Custom non-alert confirmation
+                    if (window.confirm('Are you sure you want to delete this exercise? All logs will be deleted too.')) {
+                        const idToDelete = e.target.closest('button').dataset.id;
+
+                        // 1. Delete exercise
+                        appData.exercises = appData.exercises.filter(e => e.id !== idToDelete);
+
+                        // 2. Delete associated logs
+                        appData.logs = appData.logs.filter(log => log.exerciseId !== idToDelete);
+
+                        saveData(appData);
+                        resetForm();
+                        renderManageExercises();
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>
